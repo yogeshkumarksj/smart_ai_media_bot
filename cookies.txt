@@ -1,0 +1,2 @@
+# Netscape HTTP Cookie File
+.youtube.com	TRUE	/	FALSE	1893456000	VISITOR_INFO1_LIVE	qwerty123
