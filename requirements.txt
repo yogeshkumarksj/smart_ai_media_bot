@@ -1,9 +1,6 @@
 fastapi
 uvicorn[standard]
+python-telegram-bot==20.6
 yt-dlp==2025.10.22
 instaloader
-python-telegram-bot==20.6
 pydantic
-python-multipart
-# optional cookie exporter:
-browser-cookie3
