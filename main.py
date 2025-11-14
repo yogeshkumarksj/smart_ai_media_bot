@@ -3,6 +3,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from http import HTTPStatus
+import traceback
 import yt_dlp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -66,7 +67,9 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_video(video=video, caption=f'Downloaded in {quality}!')
         os.remove(file_path)
     except Exception as e:
-        await query.edit_message_text(f'Error: {str(e)}. For private/CAPTCHA, upload fresh cookies via /cookies.')
+    full_error = traceback.format_exc()
+    print("YT-DLP ERROR:\n", full_error)
+    await query.edit_message_text(f"Error: {type(e).__name__}. Check logs.")
 
 ptb_app.add_handler(CommandHandler('start', start))
 ptb_app.add_handler(CommandHandler('cookies', handle_cookies))
