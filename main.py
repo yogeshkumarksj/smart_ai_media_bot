@@ -46,14 +46,14 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text('Downloading... (Solve any CAPTCHA in browser if needed, then re-upload cookies.)')
     ydl_opts = {
-        'format': quality,
-        'outtmpl': '/tmp/%(title)s.%(ext)s',
-        'merge_output_format': 'mp4',
-        'cookies': cookies_path,
-        'sleep_interval': 5,
-        'extractor_retries': 5,
-        'impersonate': 'chrome120',  # Evade basic blocks
-    }
+    'format': quality,
+    'outtmpl': '/tmp/%(title)s.%(ext)s',
+    'merge_output_format': 'mp4',
+    'cookies': cookies_path,
+    'sleep_interval': 5,
+    'extractor_retries': 5,
+    'impersonate': 'chrome',  # Updated: Valid target for browser evasion
+}
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
