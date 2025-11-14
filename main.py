@@ -3,91 +3,124 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from http import HTTPStatus
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters,
+    ContextTypes,
+)
+
 import yt_dlp
 import traceback
 
+# ----------------------------------------
+# Logging
+# ----------------------------------------
 logging.basicConfig(level=logging.INFO)
 
+# ----------------------------------------
+# Environment Variables (Render)
+# ----------------------------------------
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 WEBHOOK_PATH = f"/{BOT_TOKEN}"
-WEBHOOK_URL = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost:8000')}{WEBHOOK_PATH}"
+WEBHOOK_URL = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}{WEBHOOK_PATH}"
 
-# Permanent server-side cookies
-YOUTUBE_COOKIES = "/app/youtube.txt"
+# Cookies file for YouTube login
+COOKIES = "/app/cookies.txt"
 
+# ----------------------------------------
+# Telegram Application
+# ----------------------------------------
 ptb_app = Application.builder().token(BOT_TOKEN).build()
 
-
-# --------------------------
-# /start
-# --------------------------
+# ----------------------------------------
+# /start command
+# ----------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Send any video link (YouTube, TikTok, Insta, FB).")
+    await update.message.reply_text("Send any video link (YouTube, Instagram, FB, TikTok).")
 
 
-# --------------------------
-# URL received
-# --------------------------
+# ----------------------------------------
+# Handle incoming URL
+# ----------------------------------------
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text
+    url = update.message.text.strip()
 
-    # Extract metadata first
+    ydl_opts_meta = {
+        "quiet": True,
+        "skip_download": True,
+        "cookies": COOKIES,
+
+        # Very important for YouTube
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+
+        # YouTube now requires JS processing
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web", "android"]
+            }
+        }
+    }
+
     try:
-        ydl = yt_dlp.YoutubeDL({
-            "quiet": True,
-            "cookies": YOUTUBE_COOKIES,
-            "skip_download": True
-        })
+        ydl = yt_dlp.YoutubeDL(ydl_opts_meta)
         info = ydl.extract_info(url, download=False)
-    except Exception as e:
+
+    except Exception:
         print("Metadata ERROR:", traceback.format_exc())
-        await update.message.reply_text("❌ Unable to fetch video details. Try another link.")
+        await update.message.reply_text("❌ Unable to fetch video details.")
         return
 
-    title = info.get("title", "No title")
-    thumbnail = info.get("thumbnail")
-    platform = info.get("extractor_key", "Unknown")
+    title = info.get("title", "Untitled")
+    thumbnail = info.get("thumbnail", None)
+    platform = info.get("extractor_key")
 
-    # Save URL for next step
     context.user_data["url"] = url
 
     keyboard = [
-        [InlineKeyboardButton("Download MP4", callback_data="dl")]
+        [InlineKeyboardButton("⬇ Download MP4", callback_data="dl")],
     ]
 
     await update.message.reply_photo(
         photo=thumbnail,
-        caption=f"📌 *{title}*\n🎬 Platform: {platform}",
+        caption=f"🎬 *{title}*\n📌 Platform: {platform}",
         reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        parse_mode="Markdown",
     )
 
 
-# --------------------------
-# DOWNLOAD BUTTON
-# --------------------------
+# ----------------------------------------
+# Handle Download Button
+# ----------------------------------------
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    url = context.user_data["url"]
-
+    url = context.user_data.get("url")
     await query.edit_message_caption("⏳ Downloading… Please wait...")
 
     ydl_opts = {
         "format": "bestvideo+bestaudio/best",
         "merge_output_format": "mp4",
         "outtmpl": "/tmp/%(title)s.%(ext)s",
-        "cookies": YOUTUBE_COOKIES,
+        "cookies": COOKIES,
 
-        # Avoid throttling
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0 Safari/537.36"
+                "Chrome/125.0 Safari/537.36"
             )
         },
 
@@ -99,9 +132,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             info = ydl.extract_info(url, download=True)
             file_path = ydl.prepare_filename(info)
 
-        # TELEGRAM Limit Check
         if os.path.getsize(file_path) > 50 * 1024 * 1024:
-            await query.message.reply_text("❌ File too large for Telegram (>50MB).")
+            await query.message.reply_text("❌ File is larger than 50 MB. Telegram cannot send it.")
             return
 
         with open(file_path, "rb") as f:
@@ -109,19 +141,22 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         os.remove(file_path)
 
-    except Exception as e:
-        print("YT-DLP ERROR:", traceback.format_exc())
+    except Exception:
+        print("Download ERROR:", traceback.format_exc())
         await query.message.reply_text("❌ Download failed. Try another link.")
 
 
-# --------------------------
-# Webhook
-# --------------------------
+# ----------------------------------------
+# Register Handlers
+# ----------------------------------------
 ptb_app.add_handler(CommandHandler("start", start))
 ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
 ptb_app.add_handler(CallbackQueryHandler(button))
 
 
+# ----------------------------------------
+# Webhook & FastAPI
+# ----------------------------------------
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await ptb_app.bot.set_webhook(WEBHOOK_URL)
@@ -144,4 +179,4 @@ async def webhook_handler(request: Request):
 
 @app.get("/")
 def home():
-    return {"status": "Bot running"}
+    return {"status": "Bot running", "webhook": WEBHOOK_URL}
