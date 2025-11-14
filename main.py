@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request, Response
 from http import HTTPStatus
 import traceback
 import yt_dlp
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
@@ -16,14 +17,19 @@ WEBHOOK_URL = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost:8
 
 ptb_app = Application.builder().token(BOT_TOKEN).read_timeout(7).get_updates_read_timeout(42).build()
 
+# Regex to detect URLs
+URL_REGEX = re.compile(r'https?://\S+')
+
 
 # --------------------------
 # /start command
 # --------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Send a video URL from YouTube, FB, or Insta!\n"
-        "Use /cookies to upload session cookies for private/age-restricted videos."
+        "🎉 Welcome to SmartAI Media Downloader!\n\n"
+        "Send me ANY video link from YouTube, Instagram, Facebook, Twitter, etc.\n"
+        "If the video is private or YouTube restricts it, upload cookies via:\n\n"
+        "/cookies"
     )
 
 
@@ -37,23 +43,38 @@ async def handle_cookies(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await file.download_to_drive(cookies_path)
         context.user_data["cookies_path"] = cookies_path
 
-        await update.message.reply_text("Cookies uploaded successfully! Now send a URL.")
+        await update.message.reply_text("✅ Cookies uploaded! Now send a video URL.")
     else:
-        await update.message.reply_text("Please upload a valid .txt cookies file.")
+        await update.message.reply_text("❌ Please send a valid .txt cookies file.")
 
 
 # --------------------------
-# User sends URL
+# Handle incoming text (URL only)
 # --------------------------
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["url"] = update.message.text
+    text = update.message.text
+
+    # ❌ If it's not a URL → show helpful message
+    if not URL_REGEX.search(text):
+        await update.message.reply_text(
+            "❌ That doesn't look like a valid video link.\n\n"
+            "Send me a URL from YouTube, Instagram, Facebook, etc.\n"
+            "Need cookies? Use /cookies"
+        )
+        return
+
+    # ✔ Valid URL → store it
+    context.user_data["url"] = text
 
     keyboard = [
         [InlineKeyboardButton("Best", callback_data="best"),
          InlineKeyboardButton("720p", callback_data="720")],
         [InlineKeyboardButton("1080p", callback_data="1080")]
     ]
-    await update.message.reply_text("Select quality:", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text(
+        "🎥 Select download quality:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 
 # --------------------------
@@ -68,28 +89,26 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "720": "bestvideo[height<=720]+bestaudio/best[height<=720]",
         "1080": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
     }
-
     quality = quality_map.get(query.data, "best")
+
     url = context.user_data.get("url")
     cookies_path = context.user_data.get("cookies_path")
 
-    # Cookies are required for many YouTube videos now
+    # Cookies needed for YouTube
     if ("youtube.com" in url or "youtu.be" in url) and not cookies_path:
         await query.edit_message_text(
-            "This YouTube video requires cookies.\n"
+            "⚠️ This YouTube video requires cookies.\n"
             "Upload cookies via /cookies (use the 'Get cookies.txt' Chrome extension)."
         )
         return
 
-    await query.edit_message_text("Downloading… please wait.")
+    await query.edit_message_text("⏳ Downloading… please wait.")
 
-    # Strongest yt-dlp bypass settings
     ydl_opts = {
         "format": quality,
         "merge_output_format": "mp4",
         "outtmpl": "/tmp/%(title)s.%(ext)s",
 
-        # Browser impersonation
         "user_agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -102,7 +121,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Accept-Language": "en-US,en;q=0.9",
         },
 
-        # YouTube restriction bypass
         "extractor_args": {
             "youtube": {
                 "player_client": ["web", "android", "ios"],
@@ -111,20 +129,13 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
         },
 
-        # Cookies support
         "cookies": cookies_path,
 
-        # Reduce throttling & failures
         "retries": 10,
         "fragment_retries": 10,
         "extractor_retries": 10,
         "sleep_interval": 3,
-        "sleep_interval_subtitles": 2,
-
-        # Timeout protection
         "socket_timeout": 30,
-
-        # Avoid failures
         "ignoreerrors": False,
     }
 
@@ -133,27 +144,24 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             info = ydl.extract_info(url, download=True)
             file_path = ydl.prepare_filename(info)
 
-        # Convert .webm/.m4a → .mp4
         if file_path.endswith(".webm") or file_path.endswith(".m4a"):
             file_path = file_path.rsplit(".", 1)[0] + ".mp4"
 
-        # Telegram 50MB limit
         if os.path.getsize(file_path) > 50 * 1024 * 1024:
-            await query.edit_message_text("Video too large (>50MB). Try 720p.")
+            await query.edit_message_text("⚠️ Video is too large (>50MB). Try 720p.")
             os.remove(file_path)
             return
 
-        # Send file
         with open(file_path, "rb") as f:
-            await query.message.reply_video(video=f, caption=f"Downloaded in {query.data}!")
+            await query.message.reply_video(video=f, caption=f"✅ Downloaded in {query.data}!")
 
         os.remove(file_path)
 
     except Exception as e:
         print("YT-DLP ERROR:\n", traceback.format_exc())
         await query.edit_message_text(
-            f"❌ Download failed: {type(e).__name__}. Check logs.\n"
-            "If YouTube shows CAPTCHA, upload NEW cookies via /cookies."
+            f"❌ Download failed: {type(e).__name__}\n"
+            "Check logs & upload new cookies via /cookies."
         )
 
 
