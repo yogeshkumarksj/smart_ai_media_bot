@@ -1,6 +1,5 @@
-gunicorn==22.0.0
-python-telegram-bot[webhooks]==21.4
-fastapi==0.115.0
-uvicorn[standard]==0.31.1
-yt-dlp[curl_cffi]==2024.10.22
-playwright==1.47.0
+fastapi
+python-telegram-bot==21.4
+uvicorn
+yt-dlp
+ffmpeg-python
