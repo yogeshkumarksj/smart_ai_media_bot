@@ -1,24 +1,48 @@
+# -----------------------------
+# Base image
+# -----------------------------
 FROM python:3.11-slim
 
-# System Updates
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    wget \
-    curl \
-    unzip \
-    chromium \
-    chromium-driver \
-    && apt-get clean
+# Avoid prompts during install
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Install yt-dlp
-RUN pip install --upgrade pip
-RUN pip install yt-dlp python-telegram-bot aiohttp httpx fastapi uvicorn gunicorn
+# -----------------------------
+# Install system dependencies
+# -----------------------------
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        curl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Create app folder
+# -----------------------------
+# Set work directory
+# -----------------------------
 WORKDIR /app
-COPY . .
 
-# Expose port
-EXPOSE 10000
+# -----------------------------
+# Copy project files
+# -----------------------------
+COPY . /app
 
-CMD ["gunicorn", "main:app", "--workers", "1", "--worker-class", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:10000"]
+# -----------------------------
+# Install Python dependencies
+# -----------------------------
+RUN pip install --no-cache-dir -r requirements.txt
+
+# -----------------------------
+# Environment variables
+# -----------------------------
+ENV PYTHONUNBUFFERED=1
+ENV BOT_TOKEN=${BOT_TOKEN}
+
+# -----------------------------
+# Expose FastAPI Port
+# -----------------------------
+EXPOSE 8000
+
+# -----------------------------
+# Start server
+# -----------------------------
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
