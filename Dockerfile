@@ -48,9 +48,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy application code
 COPY . .
 
-# Expose port
 EXPOSE 10000
 
-# Run with Gunicorn + Uvicorn worker (FastAPI/ASGI compatible)
+# Important — your entrypoint
 CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:10000"]
-
