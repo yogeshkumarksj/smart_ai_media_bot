@@ -1,182 +1,111 @@
 import os
 import logging
-import re
 import traceback
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Response
 from http import HTTPStatus
 
 import yt_dlp
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from fastapi import FastAPI, Request, Response
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, filters, ContextTypes
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters,
+    ContextTypes,
 )
 
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 WEBHOOK_PATH = f"/{BOT_TOKEN}"
-WEBHOOK_URL = (
-    f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost:8000')}{WEBHOOK_PATH}"
-)
+WEBHOOK_URL = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost:8000')}{WEBHOOK_PATH}"
 
-ptb_app = (
-    Application.builder()
-    .token(BOT_TOKEN)
-    .read_timeout(7)
-    .get_updates_read_timeout(42)
-    .build()
-)
-
-# URL validation regex
-URL_REGEX = re.compile(r'https?://\S+')
+ptb_app = Application.builder().token(BOT_TOKEN).read_timeout(7).get_updates_read_timeout(42).build()
 
 
-# ================================
-# /start command
-# ================================
+# ----------------------------------------------------
+# START
+# ----------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🎉 *Welcome to SmartAI Media Downloader!*\n\n"
-        "Send me ANY video link from:\n"
-        "YouTube, Instagram, Facebook, Twitter, etc.\n\n"
-        "If the video is private or restricted, upload cookies:\n"
-        "`/cookies`\n\n"
-        "I'm ready whenever you are 😊"
-    )
+    await update.message.reply_text("Send me any public video URL (YouTube/FB/Insta).")
 
 
-# ================================
-# Handle cookies upload
-# ================================
-async def handle_cookies(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.document and update.message.document.file_name.endswith(".txt"):
-        file = await context.bot.get_file(update.message.document.file_id)
-        cookies_path = f"/tmp/{update.effective_user.id}_cookies.txt"
-        await file.download_to_drive(cookies_path)
-        context.user_data["cookies_path"] = cookies_path
-
-        await update.message.reply_text("✅ Cookies uploaded successfully! Now send your URL.")
-    else:
-        await update.message.reply_text("❌ Please upload a valid `.txt` cookies file.")
-
-
-# ================================
-# Handle incoming URL
-# ================================
+# ----------------------------------------------------
+# HANDLE URL → extract details + show thumbnail
+# ----------------------------------------------------
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+    url = update.message.text.strip()
+    context.user_data["url"] = url
 
-    # Validate URL
-    if not URL_REGEX.search(text):
-        await update.message.reply_text(
-            "❌ That doesn't look like a valid video link.\n\n"
-            "Send me a link from YouTube, Instagram, Facebook, etc."
-        )
-        return
-
-    context.user_data["url"] = text
-
-    # Extract metadata
-    ydl_opts = {"quiet": True, "no_warnings": True, "skip_download": True}
-
+    # Try to extract metadata WITHOUT downloading
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(text, download=False)
+        ydl_opts_info = {
+            "quiet": True,
+            "skip_download": True,
+            "noplaylist": True,
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
+            info = ydl.extract_info(url, download=False)
 
         title = info.get("title", "Unknown Title")
-        platform = info.get("extractor_key", "Unknown").replace("Youtube", "YouTube")
-        thumbnail_url = info.get("thumbnail")
+        thumbnail = info.get("thumbnail")
+        uploader = info.get("uploader", "")
+        platform = info.get("extractor_key", "").replace("Generic", "Website")
 
-        context.user_data["title"] = title
+        caption = f"📌 <b>{title}</b>\n" \
+                  f"🌐 Platform: {platform}\n" \
+                  f"👤 Uploader: {uploader}"
 
-        keyboard = [
-            [InlineKeyboardButton("⬇ Download Video", callback_data="download")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬇ Download MP4", callback_data="download_mp4")]
+        ])
 
-        if thumbnail_url:
-            await update.message.reply_photo(
-                photo=thumbnail_url,
-                caption=(
-                    f"🎬 *{title}*\n"
-                    f"📌 Platform: *{platform}*\n\n"
-                    "Ready to download?"
-                ),
-                parse_mode="Markdown",
-                reply_markup=reply_markup
-            )
-        else:
-            await update.message.reply_text(
-                f"🎬 *{title}*\n📌 Platform: *{platform}*\n\nReady to download?",
-                parse_mode="Markdown",
-                reply_markup=reply_markup
-            )
+        # Send thumb + caption
+        await update.message.reply_photo(
+            photo=thumbnail,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
 
-    except Exception:
+    except Exception as e:
         print("Metadata ERROR:\n", traceback.format_exc())
-        await update.message.reply_text("❌ Could not fetch video details. Try again later.")
+        await update.message.reply_text("❌ Unable to get info. Only public videos work.")
 
 
-# ================================
-# DOWNLOAD BUTTON
-# ================================
+# ----------------------------------------------------
+# DOWNLOAD BUTTON HANDLER
+# ----------------------------------------------------
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data != "download":
-        await query.edit_message_text("❌ Invalid action.")
-        return
-
     url = context.user_data.get("url")
-    cookies_path = context.user_data.get("cookies_path")
 
-    # YouTube cookies needed
-    if ("youtube.com" in url or "youtu.be" in url) and not cookies_path:
-        await query.edit_message_text(
-            "⚠️ This YouTube video requires cookies.\n"
-            "Upload cookies via /cookies (use Get cookies.txt extension)."
-        )
-        return
+    # Safe editing (photo caption → must use edit_message_caption)
+    try:
+        if query.message.photo:
+            await query.edit_message_caption("⏳ Downloading… please wait.")
+        else:
+            await query.edit_message_text("⏳ Downloading… please wait.")
+    except:
+        await query.message.reply_text("⏳ Downloading… please wait.")
 
-    await query.edit_message_text("⏳ Downloading… please wait.")
-
-    # Full bypass yt-dlp config
+    # Download settings
     ydl_opts = {
-        "format": "bestvideo+bestaudio/best",
-        "merge_output_format": "mp4",
+        "format": "mp4/best",
         "outtmpl": "/tmp/%(title)s.%(ext)s",
+        "noplaylist": True,
 
-        "user_agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-        ),
-        "http_headers": {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-            ),
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["web", "android", "ios"],
-                "no_check_certificate": ["True"],
-                "max_comments": ["0"],
-            }
-        },
-
-        "cookies": cookies_path,
-
-        "retries": 10,
-        "fragment_retries": 10,
-        "extractor_retries": 10,
-        "sleep_interval": 3,
-        "socket_timeout": 30,
-        "ignoreerrors": False,
+        # Simple user-agent (no cookies needed)
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
 
     try:
@@ -184,36 +113,30 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             info = ydl.extract_info(url, download=True)
             file_path = ydl.prepare_filename(info)
 
-        # Convert formats
-        if file_path.endswith(".webm") or file_path.endswith(".m4a"):
-            file_path = file_path.rsplit(".", 1)[0] + ".mp4"
-
-        # Telegram 50MB limit
         if os.path.getsize(file_path) > 50 * 1024 * 1024:
-            await query.edit_message_text(
-                "⚠️ Video too large (>50MB). I cannot upload it. Try a smaller resolution."
-            )
+            await query.message.reply_text("❌ File > 50MB. Try a shorter video.")
             os.remove(file_path)
             return
 
-        # Upload to Telegram
         with open(file_path, "rb") as f:
-            await query.message.reply_video(video=f, caption="✅ Download complete!")
+            await query.message.reply_video(
+                video=f,
+                caption="✅ Download complete!"
+            )
 
         os.remove(file_path)
 
-    except Exception:
-        print("YT-DLP ERROR:\n", traceback.format_exc())
-        await query.edit_message_text(
-            "❌ Download failed. Check logs or upload new cookies via /cookies."
+    except Exception as e:
+        print("DOWNLOAD ERROR:\n", traceback.format_exc())
+        await query.message.reply_text(
+            "❌ Failed to download. Only public non-restricted videos can be downloaded."
         )
 
 
-# ================================
-# Webhook + FastAPI Integration
-# ================================
+# ----------------------------------------------------
+# FASTAPI + WEBHOOK
+# ----------------------------------------------------
 ptb_app.add_handler(CommandHandler("start", start))
-ptb_app.add_handler(CommandHandler("cookies", handle_cookies))
 ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
 ptb_app.add_handler(CallbackQueryHandler(button))
 
@@ -241,4 +164,3 @@ async def process_update(request: Request):
     update = Update.de_json(req, ptb_app.bot)
     await ptb_app.process_update(update)
     return Response(status_code=HTTPStatus.OK)
-
