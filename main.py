@@ -9,7 +9,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from telegram.constants import ParseMode
 
 logging.basicConfig(level=logging.INFO)
-BOT_TOKEN = os.environ['BOT_TOKEN']
+BOT_TOKEN = 8072128824:AAHdtHgPxQ_Lcyy0D7zELuYqteedRO81Mn0
 WEBHOOK_PATH = f"/{BOT_TOKEN}"
 WEBHOOK_URL = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost:8000')}{WEBHOOK_PATH}"
 
