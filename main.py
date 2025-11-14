@@ -15,7 +15,7 @@ WEBHOOK_PATH = f"/{BOT_TOKEN}"
 WEBHOOK_URL = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost:8000')}{WEBHOOK_PATH}"
 
 # Permanent server-side cookies
-YOUTUBE_COOKIES = "/app/cookies/youtube.txt"
+YOUTUBE_COOKIES = "/app/youtube.txt"
 
 ptb_app = Application.builder().token(BOT_TOKEN).build()
 
